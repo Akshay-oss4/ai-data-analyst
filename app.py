@@ -1,9 +1,19 @@
-"""Streamlit entry point: upload -> validate -> detect types -> clean -> download."""
+"""Streamlit entry point: upload -> validate -> clean -> KPIs -> EDA charts."""
 from pathlib import Path
 
 import requests
 import streamlit as st
 
+from src.analysis.charts import (
+    category_bar_chart,
+    correlation_heatmap,
+    histogram_chart,
+    missing_values_chart,
+    time_series_chart,
+)
+from src.analysis.eda import aggregate_over_time, run_eda
+from src.analysis.kpis import compute_kpis
+from src.analysis.metric_selectors import pick_primary_date_column, pick_primary_metrics
 from src.cleaning.cleaner import (
     CleaningOptions,
     CleaningResult,
@@ -46,6 +56,11 @@ def cached_clean(df, options: CleaningOptions) -> CleaningResult:
     return clean_dataframe(df, options)
 
 
+@st.cache_data(show_spinner=False)
+def cached_analysis(df, profiles):
+    return run_eda(df, profiles), compute_kpis(df, profiles)
+
+
 def check_ollama() -> tuple[bool, str]:
     try:
         resp = requests.get(f"{settings.ollama_host}/api/tags", timeout=3)
@@ -85,43 +100,20 @@ options = CleaningOptions(
 
 # ---------------- Main page ----------------
 st.title("📊 AI-Powered Automated Data Analyst")
-st.caption("Upload a CSV or Excel file, or start with a sample dataset.")
+st.caption("Upload a CSV or Excel file to begin.")
 
 st.subheader("1. Upload your data")
-sample_dir = Path(__file__).resolve().parent / "data" / "sample"
-sample_files = sorted(
-    path for path in sample_dir.iterdir()
-    if path.is_file() and path.suffix.lower() in {".csv", ".tsv", ".txt", ".xlsx", ".xlsm"}
+uploaded = st.file_uploader(
+    "Choose a file", type=["csv", "tsv", "txt", "xlsx", "xlsm"], help="CSV, TSV, TXT or Excel"
 )
-data_source = st.radio("Data source", ["Upload a file", "Sample dataset"], horizontal=True)
+if uploaded is None:
+    st.info("Waiting for a file. Sample files are in the data/sample folder of the project.")
+    st.stop()
 
-if data_source == "Upload a file":
-    uploaded = st.file_uploader(
-        "Choose a file", type=["csv", "tsv", "txt", "xlsx", "xlsm"], help="CSV, TSV, TXT or Excel"
-    )
-    if uploaded is None:
-        st.info("Choose a file to begin, or select a sample dataset.")
-        st.stop()
-    filename = uploaded.name
-    data = uploaded.getvalue()
-else:
-    if not sample_files:
-        st.warning("No sample datasets were found in data/sample.")
-        st.stop()
-    default_sample = next(
-        (index for index, path in enumerate(sample_files) if path.name == "messy_data.csv"), 0
-    )
-    sample_path = st.selectbox(
-        "Choose a sample dataset",
-        sample_files,
-        index=default_sample,
-        format_func=lambda path: path.stem.replace("_", " ").title(),
-    )
-    filename = sample_path.name
-    data = sample_path.read_bytes()
+data = uploaded.getvalue()
 
 sheet_choice = None
-if Path(filename).suffix.lower() in EXCEL_EXTENSIONS:
+if Path(uploaded.name).suffix.lower() in EXCEL_EXTENSIONS:
     try:
         sheets = get_excel_sheet_names(data)
     except FileLoadError as exc:
@@ -134,7 +126,7 @@ if Path(filename).suffix.lower() in EXCEL_EXTENSIONS:
     )
 
 try:
-    result = cached_load(data, filename, sheet_choice)
+    result = cached_load(data, uploaded.name, sheet_choice)
 except FileLoadError as exc:
     st.error(str(exc))
     st.stop()
@@ -220,6 +212,87 @@ with tab_clean:
         mime="text/csv",
     )
 
+# ---------------- KPIs ----------------
+eda, kpis = cached_analysis(cleaned, cleaning.profiles)
+
+st.subheader("5. Key metrics (KPIs)")
+for start in range(0, len(kpis), 4):
+    cols = st.columns(4)
+    for widget, kpi in zip(cols, kpis[start:start + 4]):
+        widget.metric(kpi.name, kpi.display, help=kpi.description)
+
+# ---------------- EDA ----------------
+st.subheader("6. Automated exploration")
+t_dist, t_cat, t_corr, t_time, t_quality = st.tabs(
+    ["Distributions", "Categories", "Correlations", "Over time", "Data quality"]
+)
+
+with t_dist:
+    if not eda.numeric_columns:
+        st.info("No numeric columns were found.")
+    else:
+        num_col = st.selectbox("Numeric column", eda.numeric_columns, key="dist_col")
+        st.plotly_chart(histogram_chart(cleaned, num_col), key="dist_chart")
+        with st.expander("Summary statistics for all numeric columns"):
+            st.dataframe(eda.numeric_summary)
+
+with t_cat:
+    if not eda.categorical_summaries:
+        st.info("No categorical columns were found.")
+    else:
+        cat_col = st.selectbox("Categorical column", list(eda.categorical_summaries), key="cat_col")
+        st.plotly_chart(category_bar_chart(cleaned, cat_col), key="cat_chart")
+        st.dataframe(eda.categorical_summaries[cat_col])
+
+with t_corr:
+    if eda.correlation_matrix is None:
+        st.info("At least two numeric columns are needed for correlations.")
+    else:
+        st.plotly_chart(correlation_heatmap(eda.correlation_matrix), key="corr_chart")
+        if eda.strong_correlations:
+            for pair in eda.strong_correlations[:10]:
+                st.write(
+                    f"- **{pair.column_a}** and **{pair.column_b}**: "
+                    f"{pair.strength} {pair.direction} relationship (r = {pair.correlation})"
+                )
+            st.caption("Correlation means two columns move together. It does not prove that one causes the other.")
+        else:
+            st.info("No strong correlations (|r| of 0.6 or more) were found.")
+
+with t_time:
+    if not eda.datetime_columns or not eda.numeric_columns:
+        st.info("A date column and at least one numeric column are needed for a time chart.")
+    else:
+        default_date = pick_primary_date_column(cleaning.profiles) or eda.datetime_columns[0]
+        date_col = st.selectbox(
+            "Date column", eda.datetime_columns, index=eda.datetime_columns.index(default_date), key="ts_date"
+        )
+        default_metric = pick_primary_metrics(cleaning.profiles, k=1)[0]
+        metric = st.selectbox(
+            "Metric", eda.numeric_columns, index=eda.numeric_columns.index(default_metric), key="ts_metric"
+        )
+        ts, period_label = aggregate_over_time(cleaned, date_col, metric)
+        if ts.empty:
+            st.info("There is no data for this combination.")
+        else:
+            st.plotly_chart(time_series_chart(ts, metric, period_label), key="ts_chart")
+        for info in eda.datetime_info:
+            if info["column"] == date_col:
+                st.caption(
+                    f"{date_col}: {info['start']} to {info['end']} ({info['span_days']:,} days), "
+                    f"{info['frequency']} data."
+                )
+
+with t_quality:
+    fig = missing_values_chart(raw_profiles)
+    if fig is None:
+        st.success("No missing values were found in the original file.")
+    else:
+        st.plotly_chart(fig, key="missing_chart")
+    st.caption("Based on the raw file, before cleaning.")
+
 # Keep results available for the next phases
 st.session_state["load_result"] = result
 st.session_state["cleaning_result"] = cleaning
+st.session_state["eda_result"] = eda
+st.session_state["kpis"] = kpis
