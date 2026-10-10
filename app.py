@@ -1,19 +1,22 @@
-"""Streamlit entry point: upload -> validate -> clean -> KPIs -> EDA charts."""
+"""Streamlit entry point: upload -> validate -> clean -> KPIs -> EDA -> trends & anomalies."""
 from pathlib import Path
 
+import pandas as pd
 import requests
 import streamlit as st
 
 from src.analysis.charts import (
+    anomaly_chart,
     category_bar_chart,
     correlation_heatmap,
     histogram_chart,
     missing_values_chart,
     time_series_chart,
+    trend_chart,
 )
-from src.analysis.eda import aggregate_over_time, run_eda
-from src.analysis.kpis import compute_kpis
+from src.analysis.eda import aggregate_over_time
 from src.analysis.metric_selectors import pick_primary_date_column, pick_primary_metrics
+from src.analysis.pipeline import AnalysisBundle, run_analysis
 from src.cleaning.cleaner import (
     CleaningOptions,
     CleaningResult,
@@ -44,6 +47,7 @@ CATEGORICAL_FILL_LABELS = {
     "mode": "Fill with most common value",
     "none": "Leave missing",
 }
+SEVERITY_ICONS = {"high": "🔴", "medium": "🟠", "low": "🟡", "info": "🔵"}
 
 
 @st.cache_data(show_spinner=False)
@@ -56,9 +60,9 @@ def cached_clean(df, options: CleaningOptions) -> CleaningResult:
     return clean_dataframe(df, options)
 
 
-@st.cache_data(show_spinner=False)
-def cached_analysis(df, profiles):
-    return run_eda(df, profiles), compute_kpis(df, profiles)
+@st.cache_data(show_spinner="Analyzing your data...")
+def cached_bundle(cleaning: CleaningResult) -> AnalysisBundle:
+    return run_analysis(cleaning)
 
 
 def check_ollama() -> tuple[bool, str]:
@@ -212,9 +216,11 @@ with tab_clean:
         mime="text/csv",
     )
 
-# ---------------- KPIs ----------------
-eda, kpis = cached_analysis(cleaned, cleaning.profiles)
+# ---------------- Run the analysis engine ----------------
+bundle = cached_bundle(cleaning)
+eda, kpis = bundle.eda, bundle.kpis
 
+# ---------------- KPIs ----------------
 st.subheader("5. Key metrics (KPIs)")
 for start in range(0, len(kpis), 4):
     cols = st.columns(4)
@@ -291,8 +297,109 @@ with t_quality:
         st.plotly_chart(fig, key="missing_chart")
     st.caption("Based on the raw file, before cleaning.")
 
+# ---------------- Trends, anomalies, findings ----------------
+st.subheader("7. Trends, anomalies and findings")
+t_find, t_trend, t_anom = st.tabs(["Important findings", "Trends", "Anomalies"])
+
+with t_find:
+    if not bundle.findings:
+        st.info("Nothing notable was found.")
+    for finding in bundle.findings:
+        st.markdown(f"{SEVERITY_ICONS[finding.severity]} **{finding.title}** ({finding.severity})  \n{finding.detail}")
+
+with t_trend:
+    if not bundle.trends:
+        st.info("Trend analysis needs a date column and at least one numeric metric.")
+    else:
+        trend_table = pd.DataFrame(
+            [
+                {
+                    "metric": t.metric,
+                    "assessment": t.assessment,
+                    "change along trend (%)": t.change_pct,
+                    "latest period vs previous (%)": t.last_period_change_pct,
+                    "complete periods": t.n_periods,
+                    "per": t.period,
+                    "aggregation": t.aggregation,
+                    "p-value": t.p_value,
+                }
+                for t in bundle.trends
+            ]
+        )
+        st.dataframe(trend_table)
+        st.caption(
+            "A trend counts only if it is statistically significant (p < 0.05) and at least 5% along the "
+            "trend line. Incomplete first/last periods are excluded."
+        )
+        chosen = st.selectbox("Show chart for", [t.metric for t in bundle.trends], key="trend_metric")
+        trend = next(t for t in bundle.trends if t.metric == chosen)
+        if "fitted" not in trend.series.columns:
+            st.info("Not enough complete periods for a trend (at least 4 are needed).")
+        else:
+            period_marks = [a for a in bundle.anomalies.periods if a.metric == chosen]
+            st.plotly_chart(trend_chart(trend, period_marks), key="trend_chart")
+
+with t_anom:
+    an = bundle.anomalies
+    if not an.columns and an.rows is None and not an.periods:
+        st.success("No unusual values were detected.")
+    if an.columns:
+        st.markdown("**Unusual values per column** (IQR rule, plus Z-score for symmetric columns)")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "column": a.column,
+                        "severity": a.severity,
+                        "unusual values": a.count,
+                        "% of rows": a.pct,
+                        "lower limit": a.lower_bound,
+                        "upper limit": a.upper_bound,
+                        "extreme": a.extreme_count,
+                        "methods": ", ".join(a.methods),
+                    }
+                    for a in an.columns
+                ]
+            )
+        )
+        pick = st.selectbox("Show chart for", [a.column for a in an.columns], key="anom_col")
+        ca = next(a for a in an.columns if a.column == pick)
+        st.plotly_chart(
+            anomaly_chart(
+                cleaned, ca.column, ca.flagged_index, ca.lower_bound, ca.upper_bound,
+                pick_primary_date_column(cleaning.profiles),
+            ),
+            key="anom_chart",
+        )
+        st.caption("Most extreme values:")
+        st.dataframe(ca.examples)
+    if an.rows is not None:
+        st.markdown(
+            f"**Unusual rows across several columns** ({an.rows.method}): {an.rows.count} rows "
+            f"({an.rows.pct}%), using {', '.join(an.rows.columns_used)}"
+        )
+        st.dataframe(an.rows.rows.head(50))
+    if an.periods:
+        st.markdown("**Unusual periods** (far from the metric's own trend line)")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "metric": a.metric,
+                        "period": a.period,
+                        "value": round(a.value, 2),
+                        "expected": round(a.expected, 2),
+                        "deviation %": a.deviation_pct,
+                        "z-score": a.z_score,
+                        "direction": a.direction,
+                        "severity": a.severity,
+                    }
+                    for a in an.periods
+                ]
+            )
+        )
+
 # Keep results available for the next phases
 st.session_state["load_result"] = result
 st.session_state["cleaning_result"] = cleaning
-st.session_state["eda_result"] = eda
-st.session_state["kpis"] = kpis
+st.session_state["analysis_bundle"] = bundle
