@@ -33,7 +33,7 @@ from src.ui.pages import (
     render_overview,
     render_welcome,
 )
-from src.ui.alerts_page import render_alerts_page, run_auto_alert
+from src.ui.history_page import render_history_page, run_auto_save
 from src.ui.report_page import render_report_page
 
 st.set_page_config(
@@ -64,8 +64,9 @@ PAGES = {
     "📈 Analysis": render_analysis,
     "💡 Insights": render_insights_page,
     "📄 Report": render_report_page,
-    "🔔 Alerts": render_alerts_page,
+    "🕘 History": render_history_page,
 }
+
 NUMERIC_FILL_LABELS = {
     "median": "Fill with median",
     "mean": "Fill with mean",
@@ -241,4 +242,13 @@ auto_outcome = run_auto_alert(ctx)
 if auto_outcome is not None and auto_outcome.status in ("sent", "failed"):
     st.toast(auto_outcome.message, icon="📧")
 
+saved = run_auto_save(ctx)
+if saved is not None and saved[1]:
+    st.toast(f"Saved to history as run #{saved[0]}", icon="🕘")
+
+if settings.enable_alerts:
+    auto_outcome = run_auto_alert(ctx)
+    if auto_outcome is not None and auto_outcome.status in ("sent", "failed"):
+        st.toast(auto_outcome.message, icon="📧")
+        
 PAGES[page_name](ctx)

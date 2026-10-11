@@ -12,6 +12,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 @dataclass(frozen=True)
 class Settings:
     # AI
+    enable_alerts: bool = os.getenv("ENABLE_ALERTS", "false").strip().lower() in ("1", "true", "yes")
     ai_provider: str = os.getenv("AI_PROVIDER", "ollama").lower()  # ollama | gemini
     ollama_host: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
     ollama_model: str = os.getenv("OLLAMA_MODEL", "llama3.2")
