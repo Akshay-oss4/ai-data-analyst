@@ -33,6 +33,7 @@ from src.ui.pages import (
     render_overview,
     render_welcome,
 )
+from src.ui.alerts_page import render_alerts_page, run_auto_alert
 from src.ui.report_page import render_report_page
 
 st.set_page_config(
@@ -63,6 +64,7 @@ PAGES = {
     "📈 Analysis": render_analysis,
     "💡 Insights": render_insights_page,
     "📄 Report": render_report_page,
+    "🔔 Alerts": render_alerts_page,
 }
 NUMERIC_FILL_LABELS = {
     "median": "Fill with median",
@@ -231,7 +233,12 @@ ctx = AppContext(
     insights_key=f"{scope_label}|{sheet_choice}|{options}",
 )
 
+
 # Keep results available for the next phases (report, email alerts)
 st.session_state["ctx"] = ctx
+
+auto_outcome = run_auto_alert(ctx)
+if auto_outcome is not None and auto_outcome.status in ("sent", "failed"):
+    st.toast(auto_outcome.message, icon="📧")
 
 PAGES[page_name](ctx)
