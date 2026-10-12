@@ -14,7 +14,10 @@ TEMPLATE = "plotly_white"
 
 
 def histogram_chart(df: pd.DataFrame, col: str) -> go.Figure:
-    fig = px.histogram(df, x=col, nbins=40, marginal="box", template=TEMPLATE, title=f"Distribution of {col}")
+    data, note = df[[col]], ""
+    if len(data) > 50_000:  # plotting every point would make the page and the report huge
+        data, note = data.sample(50_000, random_state=0), " (50,000-row sample)"
+    fig = px.histogram(data, x=col, nbins=40, marginal="box", template=TEMPLATE, title=f"Distribution of {col}{note}")
     fig.update_layout(bargap=0.05)
     return fig
 

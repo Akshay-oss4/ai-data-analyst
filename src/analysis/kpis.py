@@ -24,10 +24,14 @@ class KPI:
 
 
 def format_number(value: float) -> str:
-    """Compact, readable numbers: 1.23M, 12.5K, 1,234, 3.14."""
+    """Compact, readable numbers: 1.23M, 12.5K, 1,234, 3.14. Astronomical values use scientific form."""
     if pd.isna(value):
         return "n/a"
     a = abs(value)
+    if a >= 1e15:
+        return f"{value:.2e}"
+    if a >= 1e12:
+        return f"{value / 1e12:.2f}T"
     if a >= 1e9:
         return f"{value / 1e9:.2f}B"
     if a >= 1e6:

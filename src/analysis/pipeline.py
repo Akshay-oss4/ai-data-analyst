@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import numpy as np
 
 from src.analysis.anomalies import AnomalyResult, run_anomaly_detection
 from src.analysis.eda import EDAResult, run_eda
@@ -22,9 +23,10 @@ class AnalysisBundle:
 
 def run_analysis(cleaning: CleaningResult) -> AnalysisBundle:
     df, profiles = cleaning.df, cleaning.profiles
-    eda = run_eda(df, profiles)
-    kpis = compute_kpis(df, profiles)
-    trends = analyze_trends(df, profiles)
-    anomalies = run_anomaly_detection(df, profiles, trends)
-    findings = build_findings(cleaning, eda, trends, anomalies)
+    with np.errstate(all="ignore"):  # values near 1e300 can overflow harmlessly in statistics
+        eda = run_eda(df, profiles)
+        kpis = compute_kpis(df, profiles)
+        trends = analyze_trends(df, profiles)
+        anomalies = run_anomaly_detection(df, profiles, trends)
+        findings = build_findings(cleaning, eda, trends, anomalies)
     return AnalysisBundle(eda=eda, kpis=kpis, trends=trends, anomalies=anomalies, findings=findings)

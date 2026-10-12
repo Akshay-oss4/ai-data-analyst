@@ -1,8 +1,10 @@
 """Streamlit entry point.
 
 Sidebar: navigation, upload, cleaning options, filters, system status.
-Main area: the selected page (Overview, Data, Analysis, Insights).
+Main area: the selected page (Overview, Data, Analysis, Insights, Report, History).
 """
+import hashlib
+import traceback
 from dataclasses import replace
 from pathlib import Path
 
@@ -22,9 +24,11 @@ from src.ingestion.loader import (
     get_excel_sheet_names,
     load_file,
 )
-from src.ingestion.validator import validate_dataframe
-from src.profiling.type_detector import CATEGORICAL, profile_columns
+from src.ingestion.validator import ValidationReport, validate_dataframe
+from src.logging_setup import get_logger
+from src.profiling.type_detector import CATEGORICAL, ColumnProfile, profile_columns
 from src.ui.filters import FilterSpec, apply_filters, refresh_profiles
+from src.ui.history_page import render_history_page, run_auto_save
 from src.ui.pages import (
     AppContext,
     render_analysis,
@@ -33,7 +37,6 @@ from src.ui.pages import (
     render_overview,
     render_welcome,
 )
-from src.ui.history_page import render_history_page, run_auto_save
 from src.ui.report_page import render_report_page
 
 st.set_page_config(
@@ -66,7 +69,6 @@ PAGES = {
     "📄 Report": render_report_page,
     "🕘 History": render_history_page,
 }
-
 NUMERIC_FILL_LABELS = {
     "median": "Fill with median",
     "mean": "Fill with mean",
@@ -79,20 +81,46 @@ CATEGORICAL_FILL_LABELS = {
     "none": "Leave missing",
 }
 
+logger = get_logger()
 
+
+def show_failure(stage: str, filename: str) -> None:
+    """Friendly message for an unexpected error. Call it from inside an except block."""
+    logger.exception("%s failed for %s", stage, filename)
+    st.error(
+        f"Something went wrong while {stage}. The file may have an unusual structure. "
+        "The details were saved to logs/app.log."
+    )
+    with st.expander("Technical details"):
+        st.code(traceback.format_exc())
+    st.stop()
+
+
+# Arguments that start with an underscore are not hashed by Streamlit. The cache_key stands in for them,
+# so a big table is not re-hashed on every click.
 @st.cache_data(show_spinner=False)
 def cached_load(data: bytes, filename: str, sheet_name: str | None) -> LoadResult:
     return load_file(data, filename, sheet_name)
 
 
 @st.cache_data(show_spinner=False)
-def cached_clean(df, options: CleaningOptions) -> CleaningResult:
-    return clean_dataframe(df, options)
+def cached_validate(_df, cache_key: str) -> ValidationReport:
+    return validate_dataframe(_df)
+
+
+@st.cache_data(show_spinner=False)
+def cached_profiles(_df, cache_key: str) -> list[ColumnProfile]:
+    return profile_columns(_df)
+
+
+@st.cache_data(show_spinner="Cleaning your data...")
+def cached_clean(_df, cache_key: str, options: CleaningOptions) -> CleaningResult:
+    return clean_dataframe(_df, options)
 
 
 @st.cache_data(show_spinner="Analyzing your data...")
-def cached_bundle(cleaning: CleaningResult) -> AnalysisBundle:
-    return run_analysis(cleaning)
+def cached_bundle(_cleaning: CleaningResult, cache_key: str) -> AnalysisBundle:
+    return run_analysis(_cleaning)
 
 
 # ================= Sidebar, part 1: navigation, upload, cleaning options =================
@@ -141,20 +169,33 @@ if uploaded is None:
     st.stop()
 
 # ================= Load, validate, clean =================
+data = uploaded.getvalue()
+base_key = f"{hashlib.sha256(data).hexdigest()[:16]}|{sheet_choice}"
+
 try:
-    load_result = cached_load(uploaded.getvalue(), uploaded.name, sheet_choice)
+    load_result = cached_load(data, uploaded.name, sheet_choice)
 except FileLoadError as exc:
     st.error(str(exc))
     st.stop()
+except Exception:  # noqa: BLE001 - show a friendly message instead of a traceback
+    show_failure("reading the file", uploaded.name)
 
-report = validate_dataframe(load_result.df)
+try:
+    report = cached_validate(load_result.df, base_key)
+    if not report.errors:
+        raw_profiles = cached_profiles(load_result.df, base_key)
+        full_cleaning = cached_clean(load_result.df, base_key, options)
+except Exception:  # noqa: BLE001
+    show_failure("checking and cleaning the data", uploaded.name)
+
 if report.errors:
     for err in report.errors:
         st.error(err)
     st.stop()
+if full_cleaning.after_shape[0] == 0 or full_cleaning.after_shape[1] == 0:
+    st.error("Nothing is left to analyze after cleaning: every row or column was empty.")
+    st.stop()
 
-raw_profiles = profile_columns(load_result.df)
-full_cleaning = cached_clean(load_result.df, options)
 file_key = f"{uploaded.name}_{sheet_choice}"
 
 # ================= Sidebar, part 2: filters and status =================
@@ -216,7 +257,10 @@ if filters_applied:
 else:
     cleaning = full_cleaning
 
-bundle = cached_bundle(cleaning)
+try:
+    bundle = cached_bundle(cleaning, f"{base_key}|{options}|{'; '.join(filters_applied)}")
+except Exception:  # noqa: BLE001
+    show_failure("analyzing the data", uploaded.name)
 
 scope_label = uploaded.name + (f" (filtered: {'; '.join(filters_applied)})" if filters_applied else "")
 ctx = AppContext(
@@ -231,24 +275,25 @@ ctx = AppContext(
     bundle=bundle,
     filters_applied=filters_applied,
     scope_label=scope_label,
-    insights_key=f"{scope_label}|{sheet_choice}|{options}",
+    insights_key=f"{scope_label}|{base_key}|{options}",
 )
 
-
-# Keep results available for the next phases (report, email alerts)
 st.session_state["ctx"] = ctx
 
-auto_outcome = run_auto_alert(ctx)
-if auto_outcome is not None and auto_outcome.status in ("sent", "failed"):
-    st.toast(auto_outcome.message, icon="📧")
+try:
+    saved = run_auto_save(ctx)
+    if saved is not None and saved[1]:
+        st.toast(f"Saved to history as run #{saved[0]}", icon="🕘")
+except Exception:  # noqa: BLE001 - history must never break the dashboard
+    logger.exception("auto-save to history failed")
 
-saved = run_auto_save(ctx)
-if saved is not None and saved[1]:
-    st.toast(f"Saved to history as run #{saved[0]}", icon="🕘")
-
-if settings.enable_alerts:
-    auto_outcome = run_auto_alert(ctx)
-    if auto_outcome is not None and auto_outcome.status in ("sent", "failed"):
-        st.toast(auto_outcome.message, icon="📧")
-        
-PAGES[page_name](ctx)
+try:
+    PAGES[page_name](ctx)
+except Exception:  # noqa: BLE001
+    logger.exception("page %s failed for %s", page_name, uploaded.name)
+    st.error(
+        f"The {page_name.split(' ', 1)[1]} page hit an unexpected problem. The other pages still work. "
+        "The details were saved to logs/app.log."
+    )
+    with st.expander("Technical details"):
+        st.code(traceback.format_exc())

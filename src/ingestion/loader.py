@@ -4,11 +4,12 @@ Handles encoding detection, delimiter detection, Excel sheets, and size checks.
 All errors that a user can fix are raised as FileLoadError with a friendly message.
 """
 from __future__ import annotations
-
+import codecs
 import io
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
+
 
 import pandas as pd
 
@@ -64,7 +65,16 @@ def check_file(filename: str, size_bytes: int) -> str:
 
 
 def _decode_bytes(data: bytes) -> tuple[str, str]:
-    """Decode bytes to text, trying several common encodings."""
+    """Decode bytes to text. Handles UTF-32/UTF-16 byte-order marks and rejects binary files."""
+    try:
+        if data.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+            return data.decode("utf-32"), "utf-32"
+        if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+            return data.decode("utf-16"), "utf-16"
+    except UnicodeDecodeError as exc:
+        raise FileLoadError("The file has a UTF-16/UTF-32 marker but could not be decoded.") from exc
+    if b"\x00" in data[:4096]:
+        raise FileLoadError("This does not look like a text file (it contains binary data). Is it really a CSV?")
     for encoding in ENCODINGS_TO_TRY:
         try:
             return data.decode(encoding), encoding

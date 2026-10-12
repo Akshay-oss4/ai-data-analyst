@@ -150,6 +150,17 @@ def _convert_types(df: pd.DataFrame, log: list[CleaningAction]) -> pd.DataFrame:
             log.append(CleaningAction("convert_type", col, "Text (yes/no, true/false, 1/0) converted to True/False", int(df[col].notna().sum())))
     return df
 
+def _replace_infinite(df: pd.DataFrame, log: list[CleaningAction]) -> pd.DataFrame:
+    for col in df.columns:
+        series = df[col]
+        if not pd.api.types.is_float_dtype(series):
+            continue
+        mask = np.isinf(series.to_numpy(dtype="float64", na_value=np.nan))
+        count = int(mask.sum())
+        if count:
+            df[col] = series.mask(mask)  # becomes missing, and is filled by the missing-value step
+            log.append(CleaningAction("replace_infinite", col, "Infinite values treated as missing", count))
+    return df
 
 def _handle_duplicates(df: pd.DataFrame, options: CleaningOptions, log: list[CleaningAction]) -> pd.DataFrame:
     n = int(df.duplicated().sum())
@@ -231,9 +242,10 @@ def clean_dataframe(df: pd.DataFrame, options: CleaningOptions | None = None) ->
     df = _normalize_text_and_missing_tokens(df, log)
     df = _drop_empty(df, log)
     df = _convert_types(df, log)
+    df = _replace_infinite(df, log)      # infinity becomes "missing" before duplicates and filling
     df = _handle_duplicates(df, options, log)
     df = _drop_sparse_columns(df, options, log)
-    df = _impute_missing(df, options, log)
+    df = _impute_missing(df, options, log)  # always the last step
 
     return CleaningResult(
         df=df,
@@ -242,7 +254,6 @@ def clean_dataframe(df: pd.DataFrame, options: CleaningOptions | None = None) ->
         before_shape=before_shape,
         after_shape=df.shape,
     )
-
 
 def log_to_dataframe(log: list[CleaningAction]) -> pd.DataFrame:
     return pd.DataFrame(

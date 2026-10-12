@@ -166,9 +166,18 @@ def detect_row_anomalies(
     if len(cols) < 2 or len(df) < MIN_ROWS_ISOLATION:
         return None
 
-    X = df[cols].astype("float64")
+    X = df[cols].astype("float64").replace([np.inf, -np.inf], np.nan)
+    # scikit-learn works in 32-bit floats, so columns with astronomically large values are skipped
+    cols = [c for c in cols if X[c].abs().max() < 1e30]
+    if len(cols) < 2:
+        return None
+    X = X[cols]
     X = X.fillna(X.median())
-    mask, scores, method = _unusual_row_scores(X)
+
+    try:
+        mask, scores, method = _unusual_row_scores(X)
+    except (ValueError, np.linalg.LinAlgError):
+        return None
     if not mask.any():
         return None
 

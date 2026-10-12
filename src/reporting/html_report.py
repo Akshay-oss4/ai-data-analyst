@@ -73,11 +73,12 @@ def _fmt(value) -> str:
     if isinstance(value, (int, np.integer)):
         return f"{int(value):,}"
     if isinstance(value, (float, np.floating)):
-        return "" if math.isnan(value) else f"{float(value):,.2f}"
+        if math.isnan(value):
+            return ""
+        return f"{float(value):.3e}" if abs(value) >= 1e15 else f"{float(value):,.2f}"
     if isinstance(value, pd.Timestamp):
         return f"{value:%Y-%m-%d}"
     return str(value)
-
 
 def _cell(value) -> str:
     return str(value) if isinstance(value, _Raw) else esc(_fmt(value))

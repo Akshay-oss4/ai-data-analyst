@@ -10,6 +10,7 @@ from io import BytesIO
 
 import pandas as pd
 from openpyxl.styles import Font
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 
 from src.ai.insights import InsightsResult
 from src.analysis.pipeline import AnalysisBundle
@@ -19,9 +20,15 @@ from src.profiling.type_detector import profiles_to_dataframe
 _FORMULA_STARTS = ("=", "+", "-", "@")
 
 
+_MAX_CELL_CHARS = 32_000  # Excel allows 32,767 characters per cell
+
 def _safe_text(value):
-    if isinstance(value, str) and value.startswith(_FORMULA_STARTS):
-        return "'" + value
+    if isinstance(value, str):
+        value = ILLEGAL_CHARACTERS_RE.sub("", value)  # control characters make openpyxl raise an error
+        if len(value) > _MAX_CELL_CHARS:
+            value = value[:_MAX_CELL_CHARS] + "…"
+        if value.startswith(_FORMULA_STARTS):
+            value = "'" + value
     return value
 
 
