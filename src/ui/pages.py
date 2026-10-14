@@ -48,14 +48,31 @@ class AppContext:
 
 # ---------------------------------------------------------------- welcome
 def render_welcome() -> None:
-    st.title("📊 AI-Powered Automated Data Analyst")
     st.markdown(
-        "Upload a **CSV or Excel** file in the sidebar and the app will automatically:\n\n"
-        "1. validate and clean the data\n"
-        "2. detect column types, KPIs, trends and unusual values\n"
-        "3. explain the important findings in plain language\n\n"
-        "No file handy? Try the samples in the `data/sample` folder of the project."
+        '<div class="hero"><h1>📊 AI-Powered Automated Data Analyst</h1>'
+        "<p>Upload a CSV or Excel file and get cleaning, KPIs, trends, anomalies, AI insights and a report.</p></div>",
+        unsafe_allow_html=True,
     )
+    cards = [
+        ("🧹", "Clean", "Types, missing values and duplicates are handled automatically, with a full log."),
+        ("📈", "Analyze", "KPIs, trends, anomalies and correlations, chosen to fit your data."),
+        ("💡", "Explain", "Plain-language insights and recommendations, checked against the computed numbers."),
+    ]
+    for column, (icon, title, text) in zip(st.columns(3, gap="large"), cards):
+        column.markdown(
+            f'<div class="feature"><div class="feature-icon">{icon}</div><h4>{title}</h4><p>{text}</p></div>',
+            unsafe_allow_html=True,
+        )
+    st.write("")
+    st.markdown(
+        "**Get started:** upload a file in the sidebar, or pick a sample file under the upload box. "
+        "Sample files live in the `data/sample` folder."
+    )
+    if settings.demo_mode:
+        st.warning(
+            "Public demo: please upload only data you are happy to share. Insights here are written by built-in "
+            "rules. The full version uses a local AI model (Ollama)."
+        )
 
 
 # ---------------------------------------------------------------- overview
@@ -91,26 +108,29 @@ def render_overview(ctx: AppContext) -> None:
         st.info("Filters active: " + "; ".join(ctx.filters_applied))
 
     kpi_cards(bundle.kpis[:8], bundle.trends)
+    st.write("")
 
-    left, right = st.columns([3, 2])
+    left, right = st.columns([3, 2], gap="large")
     with left:
-        st.subheader("Main trend")
-        _render_main_trend(ctx)
+        with st.container(border=True):
+            st.subheader("Main trend")
+            _render_main_trend(ctx)
     with right:
-        st.subheader("Top findings")
-        if bundle.findings:
-            finding_list(bundle.findings, limit=5)
+        with st.container(border=True):
+            st.subheader("Top findings")
+            if bundle.findings:
+                finding_list(bundle.findings, limit=5)
+            else:
+                st.info("Nothing notable was found.")
+            st.caption("All findings are on the Insights page.")
+
+    with st.container(border=True):
+        st.subheader("AI summary")
+        stored = st.session_state.get("insights")
+        if stored and stored[0] == ctx.insights_key:
+            st.info(stored[1].summary)
         else:
-            st.info("Nothing notable was found.")
-        st.caption("All findings are on the Insights page.")
-
-    st.subheader("AI summary")
-    stored = st.session_state.get("insights")
-    if stored and stored[0] == ctx.insights_key:
-        st.info(stored[1].summary)
-    else:
-        st.caption("No AI summary yet. Open the Insights page and click Generate AI insights.")
-
+            st.caption("No AI summary yet. Open the Insights page and click Generate AI insights.")
 
 # ---------------------------------------------------------------- data
 def render_data(ctx: AppContext) -> None:

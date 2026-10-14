@@ -5,12 +5,22 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import plotly.io as pio
 
 from src.analysis.anomalies import PeriodAnomaly
 from src.analysis.trends import TrendResult
 from src.profiling.type_detector import ColumnProfile
 
-TEMPLATE = "plotly_white"
+pio.templates["analyst"] = go.layout.Template(
+    layout=dict(
+        colorway=["#4f46e5", "#0d9488", "#f59e0b", "#e11d48", "#0ea5e9", "#8b5cf6", "#84cc16", "#64748b"],
+        font=dict(family="Segoe UI, Roboto, Helvetica, Arial, sans-serif"),
+        title=dict(font=dict(size=16)),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+    )
+)
+TEMPLATE = "plotly_white+analyst"
 
 
 def histogram_chart(df: pd.DataFrame, col: str) -> go.Figure:

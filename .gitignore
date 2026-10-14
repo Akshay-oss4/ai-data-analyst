@@ -16,6 +16,8 @@ reports/*
 # Editors and OS
 .vscode/
 .idea/
-.DS_Store
+.DS_Storecd $HOME\Documents\ai-data-analyst
+.\.venv\Scripts\Activate.ps1
+python -m streamlit run app.py
 Thumbs.db
-logs/
+logs/   

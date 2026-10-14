@@ -17,6 +17,7 @@ from src.analysis.metric_selectors import pick_primary_date_column
 from src.analysis.pipeline import AnalysisBundle, run_analysis
 from src.cleaning.cleaner import CleaningOptions, CleaningResult, clean_dataframe
 from src.config import settings
+from src.ui.style import inject_css, top_bar    
 from src.ingestion.loader import (
     EXCEL_EXTENSIONS,
     FileLoadError,
@@ -48,17 +49,8 @@ st.set_page_config(
 
 # Card look for KPI tiles (works in light and dark themes)
 st.markdown(
-    """
-    <style>
-    [data-testid="stMetric"] {
-        background: rgba(128, 128, 128, 0.08);
-        border: 1px solid rgba(128, 128, 128, 0.25);
-        padding: 12px 14px;
-        border-radius: 10px;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
+    inject_css()
+
 )
 
 PAGES = {
@@ -82,7 +74,18 @@ CATEGORICAL_FILL_LABELS = {
 }
 
 logger = get_logger()
+SAMPLE_DIR = Path(__file__).resolve().parent / "data" / "sample"
 
+
+class SampleFile:
+    """Looks like an uploaded file, so samples and uploads go through the same code."""
+
+    def __init__(self, path: Path):
+        self.name = path.name
+        self._data = path.read_bytes()
+
+    def getvalue(self) -> bytes:
+        return self._data
 
 def show_failure(stage: str, filename: str) -> None:
     """Friendly message for an unexpected error. Call it from inside an except block."""
@@ -135,7 +138,15 @@ with st.sidebar:
         type=["csv", "tsv", "txt", "xlsx", "xlsm"],
         label_visibility="collapsed",
     )
-
+    
+    sample_names = sorted(
+        p.name for p in SAMPLE_DIR.glob("*") if p.suffix in {".csv", ".xlsx"} and p.name != "header_only.csv"
+    )
+    if uploaded is None and sample_names:
+        chosen_sample = st.selectbox("...or try a sample file", ["(none)"] + sample_names)
+        if chosen_sample != "(none)":
+            uploaded = SampleFile(SAMPLE_DIR / chosen_sample)
+            
     sheet_choice = None
     if uploaded is not None and Path(uploaded.name).suffix.lower() in EXCEL_EXTENSIONS:
         try:
@@ -229,16 +240,19 @@ with st.sidebar:
             st.caption("Leave a filter empty to include everything.")
 
     with st.expander("System status"):
-        installed = list_models()
-        if installed is None:
-            st.error("Cannot reach Ollama. Start the Ollama app.")
-        elif not installed:
-            st.warning("Ollama is running, but no model is downloaded.")
+        if settings.demo_mode:
+            st.info("Demo mode: insights are written by built-in rules (no AI model is used).")
         else:
-            st.success("Ollama is running")
-        st.caption(f"AI provider: {llm.active_provider()}")
+            installed = list_models()
+            if installed is None:
+                st.error("Cannot reach Ollama. Start the Ollama app.")
+            elif not installed:
+                st.warning("Ollama is running, but no model is downloaded.")
+            else:
+                st.success("Ollama is running")
+            st.caption(f"AI provider: {llm.active_provider()}")
         st.caption(f"Max upload: {settings.max_upload_mb} MB")
-
+        
 # ================= Apply filters and analyze =================
 filtered_df, filters_applied = apply_filters(full_cleaning.df, spec)
 if filtered_df.empty:
@@ -287,12 +301,14 @@ try:
 except Exception:  # noqa: BLE001 - history must never break the dashboard
     logger.exception("auto-save to history failed")
 
+top_bar(uploaded.name, cleaning.after_shape, filters_applied, settings.demo_mode)
+
 try:
     PAGES[page_name](ctx)
 except Exception:  # noqa: BLE001
     logger.exception("page %s failed for %s", page_name, uploaded.name)
     st.error(
-        f"The {page_name.split(' ', 1)[1]} page hit an unexpected problem. The other pages still work. "
+        f"The {page_name.split(' ', 1)[1]} page hit an unexpected problem. Th   e other pages still work. "
         "The details were saved to logs/app.log."
     )
     with st.expander("Technical details"):

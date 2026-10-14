@@ -12,7 +12,6 @@ load_dotenv(PROJECT_ROOT / ".env")
 @dataclass(frozen=True)
 class Settings:
     # AI
-    enable_alerts: bool = os.getenv("ENABLE_ALERTS", "false").strip().lower() in ("1", "true", "yes")
     ai_provider: str = os.getenv("AI_PROVIDER", "ollama").lower()  # ollama | gemini
     ollama_host: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
     ollama_model: str = os.getenv("OLLAMA_MODEL", "llama3.2")
@@ -21,12 +20,15 @@ class Settings:
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
+    # Deployment
+    demo_mode: bool = os.getenv("DEMO_MODE", "false").strip().lower() in ("1", "true", "yes")
+
     # Storage and limits
     database_path: Path = PROJECT_ROOT / os.getenv("DATABASE_PATH", "data/analyst.db")
     max_upload_mb: int = int(os.getenv("MAX_UPLOAD_MB", "50"))
     reports_dir: Path = PROJECT_ROOT / "reports"
 
-    # Email alerts (Phase 10)
+    # Email settings (the alert feature is switched off; these are only kept so old files still import)
     smtp_host: str = os.getenv("SMTP_HOST", "smtp.gmail.com")
     smtp_port: int = int(os.getenv("SMTP_PORT", "587"))
     smtp_user: str = os.getenv("SMTP_USER", "")

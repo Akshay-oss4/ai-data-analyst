@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import streamlit as st
-
+from html import escape
 from src.ai.insights import InsightsResult
 from src.analysis.findings import Finding
 from src.analysis.kpis import KPI
@@ -19,13 +19,21 @@ def kpi_cards(kpis: list[KPI], trends: list[TrendResult], per_row: int = 4) -> N
             widget.metric(kpi.name, kpi.display, delta=delta, delta_color=color, help=help_text)
 
 
+_SEVERITY_BORDER = {"high": "#dc2626", "medium": "#ea580c", "low": "#ca8a04", "info": "#4f46e5"}
+
+
 def finding_list(findings: list[Finding], limit: int | None = None) -> None:
-    """Show findings with the same F-numbers the AI uses (F1 to F12)."""
+    """Findings as cards with a colored edge. F-numbers match the ones the AI uses (F1 to F12)."""
     shown = findings if limit is None else findings[:limit]
     for number, finding in enumerate(shown, start=1):
-        tag = f"**F{number}** " if number <= 12 else ""
+        tag = f"F{number} · " if number <= 12 else ""
+        color = _SEVERITY_BORDER.get(finding.severity, "#64748b")
         st.markdown(
-            f"{SEVERITY_ICONS[finding.severity]} {tag}**{finding.title}** ({finding.severity})  \n{finding.detail}"
+            f'<div class="finding" style="border-left-color:{color}">'
+            f'<div><span class="finding-tag">{escape(tag)}{escape(finding.severity.upper())}</span>'
+            f"<strong>{escape(finding.title)}</strong></div>"
+            f'<div class="finding-detail">{escape(finding.detail)}</div></div>',
+            unsafe_allow_html=True,
         )
 
 
